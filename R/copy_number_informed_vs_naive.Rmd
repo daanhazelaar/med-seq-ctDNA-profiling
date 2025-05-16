@@ -1,0 +1,575 @@
+---
+title: "test"
+author: "Daan Hazelaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+```
+
+load results of bootstrapping the cancer samples 
+```{r}
+load("./data/bootstrap_dmr_all_samples_120_cancer_samples_n1000.RData")
+```
+
+load data of standard and offeset model fitted to All samples
+```{r}
+load("./data/data_for_dmr_analysis.RData")
+data_for_standard_analysis <- data_for_standard_analysis_all
+```
+
+Get all objects for analysis
+```{r}
+counts_miracle_subset_cv <- data_for_standard_analysis$counts_miracle_subset_cv
+meta_miracle_all <- data_for_standard_analysis$meta_miracle_all
+meta_HBD <- data_for_standard_analysis$meta_HBD
+covariates_miracle_all <- data_for_standard_analysis$covariates_miracle_all
+offset_matrix_ratio_cn_miracle <- data_for_standard_analysis$offset_matrix_ratio_cn_miracle
+
+dmr_miracle_standard <- data_for_standard_analysis$dmr_miracle_standard
+dmr_miracle_offset <- data_for_standard_analysis$dmr_miracle_offset
+
+combined_bins <- data_for_standard_analysis$combined_bins
+binsIchorCNA <- data_for_standard_analysis$binsIchorCNA
+all_ichor_cna_bins <- data_for_standard_analysis$all_ichor_cna_bins
+ratio_cn_bins_whole_genome <- data_for_standard_analysis$ratio_cn_bins_whole_genome
+estimatesIchorCNA <- data_for_standard_analysis$estimatesIchorCNA
+
+meta_total <- bind_rows(mutate(meta_HBD, sample = "HBD"), mutate(meta_miracle_all, sample = "CRLM")) |> 
+    mutate(librarySize = colSums(counts_miracle_subset_cv))
+```
+
+```{r}
+theme_frequency_plot <- ggplot2::theme(
+    panel.spacing.x = ggplot2::unit(0.05, "lines"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    text = ggplot2::element_text(size = 9, family = "Helvetica", face = "bold"),
+    axis.text.x = ggplot2::element_blank(),
+    axis.ticks.x = ggplot2::element_blank(),
+    axis.title.y = ggtext::element_textbox_simple(size = 8, orientation = "left-rotated", width = NULL, halign = .5),
+    panel.grid.major.x = ggplot2::element_blank(),
+    panel.grid.minor.x = ggplot2::element_blank(),
+    panel.grid.major.y = ggplot2::element_line(colour = "#E5E5E5", linetype = "dotted"),
+    panel.grid.minor.y = ggplot2::element_blank(),
+    panel.background = ggplot2::element_rect(fill = NA, colour = "black"),
+    panel.border = ggplot2::element_rect(fill = NA, colour = NA),
+    strip.background = ggplot2::element_blank(),
+    legend.key = ggplot2::element_blank(),
+    strip.text = ggplot2::element_text(angle = 60)
+)
+
+cnCall_colors <- c("GAIN" = "#D73027", "LOSS" = "#4575B4")
+```
+
+```{r}
+standard_dmrInfo_bootstraps <- bind_rows(lapply(1:length(bootstrap_dmr_all), function(i){
+    
+    # i <- 1
+    
+    standard_dmrInfo <- bootstrap_dmr_all[[i]]$dmr_miracle_standard_allCpgInfo |>
+        # offset_dmrInfo <- bootstrap_dmr_zero[[i]]$dmr_miracle_offset_dmrInfo |>
+        mutate(bootstrap = {{i}})
+    
+    return(standard_dmrInfo)
+}))
+
+all_cpg_standard <- standard_dmrInfo_bootstraps |>
+    # filter(bins_cpg == "chr7:150955719-150955992") |>
+    group_by(bins_cpg) |>
+    summarise(
+        sd_logFC = sd(logFC),
+        median_logFC = median(logFC),
+        sd_pvalue = sd(FDR),
+        median_p_value = median(FDR),
+        .groups = "drop"
+    ) |>
+    mutate(
+        adjusted_p_value = p.adjust(median_p_value, method = "BH")
+    ) |> 
+    left_join(dmr_miracle_standard$allCpgInfo, by = join_by(bins_cpg))
+
+dmrs_standard <- all_cpg_standard |> 
+    filter(adjusted_p_value < 0.05) 
+
+offset_dmrInfo_bootstraps <- bind_rows(lapply(1:length(bootstrap_dmr_all), function(i){
+    
+    # i <- 1
+    
+    offset_dmrInfo <- bootstrap_dmr_all[[i]]$dmr_miracle_offset_allCpgInfo |>
+        # offset_dmrInfo <- bootstrap_dmr_zero[[i]]$dmr_miracle_offset_dmrInfo |>
+        mutate(bootstrap = {{i}})
+    
+    return(offset_dmrInfo)
+}))
+
+all_cpg_offset <- offset_dmrInfo_bootstraps |> 
+    # filter(bins_cpg == "chr7:150955719-150955992") |>
+    group_by(bins_cpg) |> 
+    summarise(
+        sd_logFC = sd(logFC),
+        median_logFC = median(logFC),
+        sd_pvalue = sd(FDR),
+        median_p_value = median(FDR), 
+        .groups = "drop"
+    ) |> 
+    mutate(
+        adjusted_p_value = p.adjust(median_p_value, method = "BH")
+    )  |> 
+    left_join(dmr_miracle_offset$allCpgInfo, by = join_by(bins_cpg))
+
+dmrs_offset <- all_cpg_offset |> 
+    filter(adjusted_p_value < 0.05)
+```
+
+
+```{r}
+cnCallcounts <- estimatesIchorCNA |> 
+    filter(sampleName %in% meta_miracle_all$sampleName) |> 
+    # filter(tumorFractionEstimate > 0) |> 
+    mutate(
+        cnCall = case_when(
+            Corrected_Call == "NEUT" ~ "NEUT",
+            Corrected_Call == "HETD" ~ "LOSS",
+            Corrected_Call %in% c("GAIN", "AMP", "HLAMP", "HLAMP2") ~ "GAIN"
+        )
+    ) |> 
+    filter(cnCall != "NEUT") |> 
+    group_by(sampleName) |> 
+    mutate(nNonZeroTF_samples = n()) |> 
+    group_by(seqnames, start, bins, cnCall, sequencingType, cancerType) |> 
+    summarise(cnCallCount = n()/120, .groups = "drop")
+
+all_bins <- estimatesIchorCNA |> 
+    group_by(seqnames, bins, start) |> 
+    summarise(nSamples = n(), .groups = "drop") |> 
+    dplyr::select(!nSamples) |> 
+    tibble::rowid_to_column(var = "binID")
+```
+
+
+Plot frequency of gains and losses in samples and also the logFC of the significant DMRs to see if there is anything suspicious going on
+```{r}
+cnCallcounts_gains_medseq_colorectal <- cnCallcounts |> 
+    filter(cnCall == "GAIN" & sequencingType == "medseq" & cancerType == "coloRectal") |> 
+    right_join(all_bins, by = join_by(seqnames, start, bins)) |> 
+    mutate(cnCallCount = ifelse(is.na(cnCallCount), 0, cnCallCount),
+           # set different label for NA bins so colors look better in figure
+           cnCall = ifelse(is.na(cnCall), "GAIN", cnCall)
+    ) 
+
+cnCallcounts_loss_medseq_colorectal <- cnCallcounts |> 
+    filter(cnCall == "LOSS" & sequencingType == "medseq" & cancerType == "coloRectal") |> 
+    right_join(all_bins, by = join_by(seqnames, start, bins)) |> 
+    mutate(
+        cnCallCount = ifelse(is.na(cnCallCount), 0, cnCallCount),
+        # set different label for NA bins so colors look better in figure
+        cnCall = ifelse(is.na(cnCall), "GAIN", cnCall)
+    )
+```
+
+
+```{r}
+ggplot() +
+    geom_bar(data = cnCallcounts_gains_medseq_colorectal, aes(x = start, y = cnCallCount, fill = cnCall), stat = "identity") +
+    geom_bar(data = cnCallcounts_loss_medseq_colorectal, aes(x = start, y = -cnCallCount, fill = cnCall), stat = "identity") +
+    scale_fill_manual(values = cnCall_colors) +
+    geom_point(data = dmrs_standard, aes(x = start, y = median_logFC/3), alpha = 1, size = 0.05) +
+    facet_grid(~factor(seqnames, levels = paste0("chr", c(1:22, "X", "Y"))), space = "free_x", scales = "free_x", drop = FALSE) +
+    coord_cartesian(ylim = c(-1, 1)) +
+    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(
+        breaks = c(-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1),
+        labels = c("1", "0.75", "0.5", "0.25", "0", "0.25", "0.5", "0.75", "1"),
+        expand = c(0, 0),
+        sec.axis = sec_axis(~ . * 3, name = "LogFC DMRs")
+    ) +
+    labs(
+        title = "CN-naive DMR profile and aggregated CN-profile of 120 CRLM patients",
+        x = "Genomic location",
+        y = "Frequency of CN-calls",
+        fill = "CN-call"
+    ) +
+    theme_frequency_plot +
+    theme(
+        axis.title = element_text(size=15, face="bold"),
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title.y.left = element_text(size=15, face="bold"),
+        axis.title.y.right = element_text(size=15, face="bold"),
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 13, filename = "../manuscripts/figures/dmr_miracle_standard_all_samples.png")
+
+
+ggplot() +
+    geom_bar(data = cnCallcounts_gains_medseq_colorectal, aes(x = start, y = cnCallCount, fill = cnCall), stat = "identity") +
+    geom_bar(data = cnCallcounts_loss_medseq_colorectal, aes(x = start, y = -cnCallCount, fill = cnCall), stat = "identity") +
+    scale_fill_manual(values = cnCall_colors) +
+    geom_point(data = dmrs_offset, aes(x = start, y = median_logFC/3, color = ""), alpha = 1, size = 1) +
+    scale_color_manual(values = c("black")) +
+    facet_grid(~factor(seqnames, levels = paste0("chr", c(1:22, "X", "Y"))), space = "free_x", scales = "free_x", drop = FALSE) +
+    coord_cartesian(ylim = c(-1, 1)) +
+    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(
+        breaks = c(-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1),
+        labels = c("1", "0.75", "0.5", "0.25", "0", "0.25", "0.5", "0.75", "1"),
+        expand = c(0, 0),
+        sec.axis = sec_axis(~ . * 3, name = "LogFC DMRs")
+    ) +
+    labs(
+        title = "CN-Informed DMR profile and aggregated CN-profile of 120 CRLM patients",
+        x = "Genomic location",
+        y = "Frequency of CN-calls",
+        fill = "CN-call",
+        color = "DMR"
+    ) +
+    guides(color = guide_legend(
+        fill = guide_legend(order = 2),  # Show fill first
+        # color = guide_legend(order = 1),  # Show color second
+        override.aes = list(size = 3, alpha = 1))) +
+    theme_frequency_plot +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title.y.left = element_text(size=15, face="bold"),
+        axis.title.y.right = element_text(size=15, face="bold"),
+        legend.text = element_text(size = 14),  
+        legend.title = element_text(size = 16)
+    )
+
+# ggsave(plot = last_plot(), height = 7, width = 13, filename = "../manuscripts/figures/dmr_miracle_offset_all_samples.png")
+```
+
+
+
+```{r}
+compare_significant_dmrs <- all_cpg_standard |> 
+    full_join(all_cpg_offset, join_by(seqnames, start, end, width, strand, bins_cpg), suffix = c("_standard", "_offset")) |> 
+    select(median_logFC_standard, adjusted_p_value_standard, median_logFC_offset, adjusted_p_value_offset, seqnames, bins_cpg, strand) |> 
+    mutate(significant = factor(case_when(
+        adjusted_p_value_standard > 0.05 & adjusted_p_value_offset > 0.05 ~ "Not significant",
+        adjusted_p_value_standard < 0.05 & adjusted_p_value_offset > 0.05 ~ "Only CN-naive",
+        adjusted_p_value_standard > 0.05 & adjusted_p_value_offset < 0.05 ~ "Only CN-informed",
+        adjusted_p_value_standard < 0.05 & adjusted_p_value_offset < 0.05 ~ "Both",
+    ), levels = c("Both", "Only CN-informed", "Only CN-naive", "Not significant"))) |> 
+    left_join(combined_bins, by = join_by(seqnames, bins_cpg, strand)) |> 
+    mutate(
+        imputed_region = !binID %in% binsIchorCNA$binID,
+        imputed_region = ifelse(imputed_region, "Centromere or Telomere", "Interstitial Regions")
+    )
+```
+
+```{r}
+color_significant <- c(
+    "Not significant" = "gray", 
+    "Only CN-naive" = "#0072B2", 
+    "Only CN-informed" = "#009E73", 
+    "Both" = "#D55E00"
+)
+
+color_alpha <- c(
+    "Not significant" = 0.3, 
+    "Only CN-naive" = 1, 
+    "Only CN-informed" = 1, 
+    "Both" = 0.1
+)
+
+compare_significant_dmrs |> 
+    # filter(significant %in% c("Only offset", "Only standard")) |>
+    ggplot(aes(x = median_logFC_offset, y = median_logFC_standard, color = significant)) +
+    geom_point(alpha = 0.3, size = 0.3) +
+    scale_color_manual(values = color_significant) +
+    labs(
+        title = "Additional and removed DMRs in CN-informed DMM",
+        shape = "DMR in imputed region",
+        color = "Significance of DMRs:",
+        x = "LogFC (CN-informed)",
+        y = "LogFC (CN-naive)"
+    ) +
+    theme_light() +
+    guides(color = guide_legend(override.aes = list(size = 4, alpha = 1))) +
+    theme(
+        legend.position = "bottom",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/concordance_logFC.png")
+
+compare_significant_dmrs |> 
+    # filter(significant %in% c("Only offset", "Only standard")) |>
+    ggplot(aes(x = median_logFC_offset, y = median_logFC_standard, color = significant, alpha = significant)) +
+    geom_point(size = 3) +
+    scale_color_manual(values = color_significant) +
+    scale_alpha_manual(values = color_alpha) +
+    coord_cartesian(xlim = c(-1.5, 0.25), ylim = c(-1.5, 0.25)) +
+    theme_light() +
+    guides(color = guide_legend(override.aes = list(size = 4, alpha = 1)), alpha = "none") +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title = element_blank()
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/concordance_logFC_zoom_hypo.png")
+
+compare_significant_dmrs |> 
+    # filter(significant %in% c("Only offset", "Only standard")) |>
+    ggplot(aes(x = median_logFC_offset, y = median_logFC_standard, color = significant, alpha = significant)) +
+    geom_point(size = 3) +
+    scale_color_manual(values = color_significant) +
+    scale_alpha_manual(values = color_alpha) +
+    coord_cartesian(xlim = c(0.5, 1.75), ylim = c(0.5, 1.75)) +
+    theme_light() +
+    guides(color = guide_legend(override.aes = list(size = 4, alpha = 1)), alpha = "none") +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title = element_blank()
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/concordance_logFC_zoom_hyper.png")
+```
+
+
+```{r}
+n_dmrs_standard <- dmrs_standard |> 
+    mutate(sign = ifelse(median_logFC > 0, "Hyper methylated DMRs", "Hypo methylated DMRs")) |> 
+    group_by(seqnames, sign) |> 
+    summarise(n_dmrs_standard = n(), .groups = "drop")
+
+n_dmrs_offset <- dmrs_offset |> 
+    mutate(sign = ifelse(median_logFC > 0, "Hyper methylated DMRs", "Hypo methylated DMRs")) |> 
+    group_by(sign) |> 
+    group_by(seqnames, sign) |> 
+    summarise(n_dmrs_offset = n(), .groups = "drop")
+
+
+total_dmrs_chr <- dmr_miracle_offset$allCpgInfo |> 
+    group_by(seqnames) |> 
+    summarise(total_dmr_chr = n(), .groups = "drop")
+
+ploidy_dmr <- estimatesIchorCNA |> 
+    filter(sampleName %in% meta_miracle_all$sampleName) |> 
+    group_by(seqnames) |> 
+    filter(!is.na(logR_Copy_Number) & !is.infinite(logR_Copy_Number)) |> 
+    summarise(ploidy = median(logR_Copy_Number, na.rm = TRUE), .groups = "drop") |> 
+    left_join(n_dmrs_standard, by = join_by(seqnames)) |> 
+    left_join(n_dmrs_offset, by = join_by(seqnames, sign)) |> 
+    left_join(total_dmrs_chr, by = join_by(seqnames)) |> 
+    mutate(
+        frac_dmr_standard = n_dmrs_standard / total_dmr_chr,
+        frac_dmr_offset = n_dmrs_offset / total_dmr_chr
+    )
+```
+
+
+```{r}
+ploidy_dmr |> 
+    ggplot(aes(x = ploidy, y = frac_dmr_standard)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8) +
+    ggrepel::geom_text_repel(aes(label = seqnames), size = 3, max.overlaps = 25, force = 1) +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", size = 4.5, cor.coef.name ="rho") +
+    facet_grid(~ sign) +
+    theme_light() +
+    labs(
+        title = "Correlation between and chromosomal ploidy \nand number of DMRs (CN-naive)",
+        y = "nDMRs / total CpG islands in chromosome",
+        x = "Ploidy"
+    ) +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/correlation_ndmrs_ploidy_standard.png")
+
+ploidy_dmr |> 
+    ggplot(aes(x = ploidy, y = frac_dmr_offset)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8) +
+    ggrepel::geom_text_repel(aes(label = seqnames), size = 3, max.overlaps = 25, force = 1) +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", size = 4.5, cor.coef.name ="rho") +
+    facet_grid(~ sign) +
+    theme_light() +
+    labs(
+        title = "Correlation between and chromosomal ploidy \nand number of DMRs (CN-informed)",
+        y = "nDMRs / total CpG islands in chromosome",
+        x = "Ploidy"
+    ) +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/correlation_ndmrs_ploidy_offset.png")
+```
+
+
+```{r}
+concordant_dmrs_hyper <- dmrs_standard |>
+    filter(bins_cpg %in% dmrs_offset$bins_cpg) |>
+    filter(logFC > 0) |>
+    pull(bins_cpg)
+
+concordant_dmrs_hypo <- dmrs_standard |>
+    filter(bins_cpg %in% dmrs_offset$bins_cpg) |>
+    filter(logFC < 0) |>
+    pull(bins_cpg)
+
+only_standard_dmrs_hyper <- dmrs_standard |>
+    filter(!bins_cpg %in% dmrs_offset$bins_cpg) |>
+    filter(logFC > 0) |>
+    pull(bins_cpg)
+
+only_standard_dmrs_hypo <- dmrs_standard |>
+    filter(!bins_cpg %in% dmrs_offset$bins_cpg) |>
+    filter(logFC < 0) |>
+    pull(bins_cpg)
+
+only_offset_dmrs_hyper <- dmrs_offset |>
+    filter(!bins_cpg %in% dmrs_standard$bins_cpg) |>
+    filter(logFC > 0) |>
+    pull(bins_cpg)
+
+only_offset_dmrs_hypo <- dmrs_offset |>
+    filter(!bins_cpg %in% dmrs_standard$bins_cpg) |>
+    filter(logFC < 0) |>
+    pull(bins_cpg)
+```
+
+
+```{r}
+cpg_labelled_ratio <- offset_matrix_ratio_cn_miracle |> 
+    as_tibble(rownames = "bins_cpg") |> 
+    tidyr::pivot_longer(cols = -bins_cpg, names_to = "sampleName", values_to = "ratio") |> 
+    left_join(meta_total, by = join_by(sampleName)) |> 
+    mutate(
+        dmr_label = case_when(
+            bins_cpg %in% concordant_dmrs_hyper ~ "Concordant DMRs (hyper)",
+            bins_cpg %in% concordant_dmrs_hypo ~ "Concordant DMRs (hypo)",
+            bins_cpg %in% only_offset_dmrs_hyper ~ "Only CN-informed DMRs (hyper)",
+            bins_cpg %in% only_offset_dmrs_hypo ~ "Only CN-informed DMRs (hypo)",
+            bins_cpg %in% only_standard_dmrs_hyper ~ "Only CN-naive DMRs (hyper)",
+            bins_cpg %in% only_standard_dmrs_hypo ~ "Only CN-naive DMRs (hypo)",
+            TRUE ~ "Not signficant CpG islands"
+        )
+    ) |> 
+    group_by(bins_cpg, sample, dmr_label) |> 
+    summarise(
+        mean_logR = log2(ratio), 
+        .groups = "drop") 
+```
+
+
+
+
+```{r}
+cpg_labelled_ratio_hbd_concordant <- cpg_labelled_ratio |> 
+    filter(dmr_label %in% c("Concordant DMRs (hyper)", "Concordant DMRs (hypo)", "Not signficant CpG islands")) |> 
+    filter(sample == "HBD")
+
+cpg_labelled_ratio_CRLM_concordant <- cpg_labelled_ratio |> 
+    filter(dmr_label %in% c("Concordant DMRs (hyper)", "Concordant DMRs (hypo)", "Not signficant CpG islands")) |> 
+    filter(sample == "CRLM")
+
+ggplot() +
+    geom_density(data = cpg_labelled_ratio_hbd_concordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), alpha = 0.1) +
+    geom_histogram(data = cpg_labelled_ratio_hbd_concordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), position = "identity", alpha = 0.5, bins = 100) +
+    geom_density(data = cpg_labelled_ratio_CRLM_concordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), alpha = 0.1) +
+    geom_histogram(data = cpg_labelled_ratio_CRLM_concordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), position = "identity", alpha = 0.7, bins = 100) +
+    facet_wrap(~dmr_label) +
+    coord_cartesian(xlim = c(-0.75, 0.75)) +
+    scale_fill_manual(values = c("HBD" = "#1F77B4", "CRLM" = "#D62728")) +
+    scale_color_manual(values = c("HBD" = "#1F77B4", "CRLM" = "#D62728")) +
+    labs(
+        title = "logR distribution of concordant CpG islands",
+        x = "logR (IchorCNA)",
+        y = "Density",
+        color = "",
+        fill = ""
+    ) +
+    theme_light()  +
+    theme(
+        legend.position = "bottom",
+        legend.text = element_text(size = 14),  
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold"),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank()
+    )
+
+# ggsave(plot = last_plot(), height = 7, width = 13, filename = "../manuscripts/figures/distribution_dmr_concordance_ratios.png")
+```
+
+
+```{r}
+cpg_labelled_ratio_hbd_discordant <- cpg_labelled_ratio |> 
+    filter(!dmr_label %in% c("Concordant DMRs (hyper)", "Concordant DMRs (hypo)", "Not signficant CpG islands")) |> 
+    filter(sample == "HBD")
+
+cpg_labelled_ratio_CRLM_discordant <- cpg_labelled_ratio |> 
+    filter(!dmr_label %in% c("Concordant DMRs (hyper)", "Concordant DMRs (hypo)", "Not signficant CpG islands")) |> 
+    filter(sample == "CRLM")
+    
+    
+ggplot() +
+    geom_density(data = cpg_labelled_ratio_hbd_discordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), alpha = 0.1) +
+    # geom_density(aes(x = mean_logR, y = after_stat(count)/100, color = sample, fill = sample), alpha = 0.1) +
+    geom_histogram(data = cpg_labelled_ratio_hbd_discordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), alpha = 0.5, position = "identity", bins = 100) +
+    geom_density(data = cpg_labelled_ratio_CRLM_discordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), alpha = 0.1) +
+    # geom_density(aes(x = mean_logR, y = after_stat(count)/100, color = sample, fill = sample), alpha = 0.1) +
+    geom_histogram(data = cpg_labelled_ratio_CRLM_discordant, aes(x = mean_logR, y = ..density.., color = sample, fill = sample), alpha = 0.7, position = "identity", bins = 100) +
+    facet_wrap(~dmr_label) +
+    coord_cartesian(xlim = c(-0.75, 0.75)) +
+    scale_fill_manual(values = c("HBD" = "#1F77B4", "CRLM" = "#D62728")) +
+    scale_color_manual(values = c("HBD" = "#1F77B4", "CRLM" = "#D62728")) +
+    labs(
+        title = "logR distribution of discordant CpG islands",
+        x = "logR (IchorCNA)",
+        y = "Density",
+        color = "",
+        fill = ""
+    ) +
+    theme_light()  +
+    theme(
+        legend.position = "bottom",
+        legend.text = element_text(size = 14),  
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold"),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank()
+    )
+
+# ggsave(plot = last_plot(), height = 7, width = 13, filename = "../manuscripts/figures/distribution_dmr_disconcordance_ratios.png")
+```
+
+
+```{r}
+
+```
+

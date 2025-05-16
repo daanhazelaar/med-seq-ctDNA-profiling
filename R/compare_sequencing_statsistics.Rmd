@@ -1,0 +1,254 @@
+---
+title: "compare sequencing stats"
+author: "Daan Hazelaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+```
+
+load data
+```{r, message = FALSE}
+coverageStats <- readr::read_csv("./data/coverage_statistics.csv")
+```
+
+plotting parameters
+```{r}
+colors = c('medSeq' = '#009E73', 'shallowSeq' = '#E69F00', 'medseq_not_methylated_NA' = '#009E73', 'swgs_NA_0_150' = '#E69F00', 'shallowSeq_allReads' = '#D55E00', 'shallowSeq_sizeSelected_90_150' = '#F0E442', 'medSeq_methylated' = '#0072B2')
+
+cancerTypes_labels <- c("coloRectal" = "CRLM", "ocularMelanomaCFdna" = "Ocular Melanoma \n(cfDNA)", "ocularMelanomaTissue" = "Ocular Melanoma \n(tissue)", "ovary" = "Ovary", "skinMelanoma" = "Skin Melanoma \n(cfDNA)")
+
+sequencingType_labels <- c("medseq" = "MeD-seq", "swgs" = "sWGS")
+
+readType_labels <- c("medseq_not_methylated_NA" = "MeD-seq \n(background)", "medSeq_methylated" = "MeD-seq (methylated)", "swgs_NA_0_150" = "sWGS")
+```
+
+```{r}
+coverageStatsMean <- coverageStats |> 
+    filter(subSample == 1) |> 
+    # filter(cancerType %in% c("ovarium", "coloRectal")) |> 
+    group_by(subjectName, analysis_ID, analysis_ID2, sampleName, cancerType, origin, readType, sequencingType, methylationStatus) |> 
+    summarise(
+        meanCoverage = mean(coverage), 
+        meanDepth = mean(meanDepth),
+        meanMapQuality = mean(meanMapQuality),
+        meanBaseQuality = mean(meanBaseQuality),
+        meanCovbases = mean(covbases),
+        totalReads = sum(totalReads),
+        .groups = "drop"
+    ) |> 
+    ungroup()
+```
+
+
+```{r}
+coverageStatsMean |> 
+    ggplot(aes(x = sampleName, y = meanCoverage, fill = readType)) +
+    geom_bar(stat = "identity", position = position_dodge(preserve = "single"), width = 0.7) +
+    scale_fill_manual(values = colors, labels = readType_labels) +
+    labs(
+        title = "Sequencing coverage of MeD-seq and sWGS samples", 
+        y = "Sequencing coverage (%)",
+        x = "Samples",
+        fill = "Assay:"
+    ) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10)
+    ) +
+    scale_y_continuous(labels = scales::label_comma())+
+    facet_grid(~ cancerType, scales = "free_x", space = "free_x", labeller = labeller(cancerType = as_labeller(cancerTypes_labels)))
+
+# ggsave(plot = last_plot(), height = 5, width = 18, filename = "../manuscripts/figures/plot_bar_coverage.png")
+
+coverageStatsMean |> 
+    ggplot(aes(x = readType, y = meanCoverage)) +
+    gghalves::geom_half_point_panel(aes(color = readType), size = 1, shape = 21) +
+    gghalves::geom_half_boxplot(aes(color = readType), outlier.shape = NA) +
+    ggplot2::scale_color_manual(values = colors, guide = 'none') +
+    scale_x_discrete(labels = readType_labels) +
+    labs(
+        title = "Sequencing coverage of MeD-seq and sWGS samples", 
+        y = "Mean coverage (%)",
+        x = "Assay"
+    ) +
+    theme_light() +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    ) + 
+    scale_y_continuous(labels = scales::label_comma()) +
+    facet_grid(~cancerType, labeller = labeller(cancerType = as_labeller(cancerTypes_labels)))
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/plot_box_coverage.png")
+```
+
+
+```{r}
+coverageStatsMean |> 
+    ggplot(aes(x = sampleName, y = meanDepth, fill = readType)) +
+    geom_bar(stat = "identity", position = position_dodge(preserve = "single"), width = 0.7) +
+    scale_fill_manual(values = colors, labels = readType_labels) +
+    labs(
+        title = "Mean read depth of MeD-seq and sWGS samples", 
+        y = "Mean Depth",
+        x = "Samples",
+        fill = "Assay:"
+    ) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10)
+    ) +
+    #scale_y_continuous(labels = c("0", "10M", "20M", "30M"), breaks = c(0, 1e+7, 2e+7, 3e+7)) +
+    facet_grid(~ cancerType, scales = "free_x", space = "free_x", labeller = labeller(cancerType = as_labeller(cancerTypes_labels)))
+
+# ggsave(plot = last_plot(), height = 5, width = 18, filename = "../manuscripts/figures/plot_bar_mean_depth.png")
+
+coverageStatsMean |> 
+    ggplot(aes(x = readType, y = meanDepth)) +
+    gghalves::geom_half_point_panel(aes(color = readType), size = 1, shape = 21) +
+    gghalves::geom_half_boxplot(aes(color = readType), outlier.shape = NA) +
+    ggplot2::scale_color_manual(values = colors, guide = 'none') +
+    scale_x_discrete(labels = readType_labels) +
+    labs(
+        title = "Mean read depth of MeD-seq and sWGS samples", 
+        y = "Mean read depth",
+        x = "Assay") +
+    theme_light() +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    ) + 
+    scale_y_continuous(labels = scales::label_comma()) +
+    facet_grid(~cancerType, labeller = labeller(cancerType = as_labeller(cancerTypes_labels)))
+
+# ggsave(plot = last_plot(), height = 5, width = 9, filename = "../manuscripts/figures/plot_box_mean_depth.png")
+```
+
+
+```{r}
+coverageStatsMean |> 
+    ggplot(aes(x = sampleName, y = totalReads, fill = readType)) +
+    geom_bar(stat = "identity", position = position_dodge(preserve = "single"), width = 0.7) +
+    scale_fill_manual(values = colors, labels = readType_labels) +
+    labs(
+        title = "Total mapped reads of MeD-seq and sWGS samples", 
+        y = "Total mapped reads",
+        x = "Samples",
+        fill = "Assay:"
+    ) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10)
+    ) +
+    scale_y_continuous(labels = c("0", "10M", "20M", "30M"), breaks = c(0, 1e+7, 2e+7, 3e+7)) +
+    facet_grid(~ cancerType, scales = "free_x", space = "free_x", labeller = labeller(cancerType = as_labeller(cancerTypes_labels)))
+
+# ggsave(plot = last_plot(), height = 5, width = 18, filename = "../manuscripts/figures/plot_bar_total_reads.png")
+
+coverageStatsMean |> 
+    ggplot(aes(x = readType, y = totalReads)) +
+    gghalves::geom_half_point_panel(aes(color = readType), size = 1, shape = 21) +
+    gghalves::geom_half_boxplot(aes(color = readType), outlier.shape = NA) +
+    ggplot2::scale_color_manual(values = colors, guide = 'none') +
+    scale_x_discrete(labels = readType_labels) +
+    labs(
+        title = "Total mapped sequencing reads of MeD-seq and sWGS samples", 
+        y = "Totals read counts",
+        x = "Assay") +
+    theme_light() +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    ) + 
+    scale_y_continuous(labels = c("0", "10M", "20M", "30M"), breaks = c(0, 1e+7, 2e+7, 3e+7)) +
+    facet_grid(~cancerType, labeller = labeller(cancerType = as_labeller(cancerTypes_labels))) 
+
+# ggsave(plot = last_plot(), height = 5, width = 9, filename = "../manuscripts/figures/plot_box_total_reads.png")
+```
+
+```{r}
+coverageStatsMean |> 
+    ggplot(aes(x = sampleName, y = meanMapQuality, fill = readType)) +
+    geom_bar(stat = "identity", position = position_dodge(preserve = "single"), width = 0.7) +
+    scale_fill_manual(values = colors, labels = readType_labels) +
+    labs(
+        title = "Mapping quality of MeD-seq and sWGS samples", 
+        y = "Mean mapping quality",
+        x = "Samples",
+        fill = "Assay:"
+    ) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10)
+    ) +
+    scale_y_continuous(labels = scales::label_comma()) +
+    facet_grid(~ cancerType, scales = "free_x", space = "free_x", labeller = labeller(cancerType = as_labeller(cancerTypes_labels)))
+
+# ggsave(plot = last_plot(), height = 5, width = 18, filename = "../manuscripts/figures/plot_bar_mapq.png")
+
+coverageStatsMean |> 
+    ggplot(aes(x = readType, y = meanMapQuality)) +
+    gghalves::geom_half_point_panel(aes(color = readType), size = 1, shape = 21) +
+    gghalves::geom_half_boxplot(aes(color = readType), outlier.shape = NA) +
+    ggplot2::scale_color_manual(values = colors, guide = 'none') +
+    facet_grid(~cancerType, labeller = labeller(cancerType = as_labeller(cancerTypes_labels))) +
+    scale_x_discrete(labels = readType_labels) +
+    coord_cartesian(ylim = c(0, 60)) +
+    labs(
+        title = "Read mapping quality of MeD-seq and sWGS samples", 
+        y = "Mean mapping quality",
+        x = "Assay") +
+    theme_light() +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    ) + 
+    scale_y_continuous(labels = scales::label_comma())
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/plot_box_mapq.png")
+```
+```{r}
+
+```
+

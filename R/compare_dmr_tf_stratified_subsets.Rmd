@@ -1,0 +1,560 @@
+---
+title: "test"
+author: "Daan Hazelaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+```
+
+load results of bootstrapping the cancer samples 
+```{r}
+load("./data/bootstrap_dmr_all_samples_55_cancer_samples_n1000.RData")
+load("./data/bootstrap_dmr_NONzeroTF_samples_55_cancer_samples_n1000.RData")
+load("./data/bootstrap_dmr_zeroTF_55_cancer_samples_n1000.RData")
+```
+
+
+load data of standard and offeset model fitted to All samples
+```{r}
+load("./data/data_for_dmr_analysis.RData")
+data_for_standard_analysis <- data_for_standard_analysis_all
+```
+
+
+Get all objects for analysis
+```{r}
+counts_miracle_subset_cv <- data_for_standard_analysis$counts_miracle_subset_cv
+meta_miracle_all <- data_for_standard_analysis$meta_miracle_all
+meta_HBD <- data_for_standard_analysis$meta_HBD
+covariates_miracle_all <- data_for_standard_analysis$covariates_miracle_all
+offset_matrix_ratio_cn_miracle <- data_for_standard_analysis$offset_matrix_ratio_cn_miracle
+
+dmr_miracle_standard <- data_for_standard_analysis$dmr_miracle_standard
+dmr_miracle_offset <- data_for_standard_analysis$dmr_miracle_offset
+
+combined_bins <- data_for_standard_analysis$combined_bins
+binsIchorCNA <- data_for_standard_analysis$binsIchorCNA
+all_ichor_cna_bins <- data_for_standard_analysis$all_ichor_cna_bins
+ratio_cn_bins_whole_genome <- data_for_standard_analysis$ratio_cn_bins_whole_genome
+estimatesIchorCNA <- data_for_standard_analysis$estimatesIchorCNA
+
+meta_total <- bind_rows(mutate(meta_HBD, sample = "HBD"), mutate(meta_miracle_all, sample = "CRLM")) 
+```
+
+
+```{r}
+theme_frequency_plot <- ggplot2::theme(
+    panel.spacing.x = ggplot2::unit(0.05, "lines"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    text = ggplot2::element_text(size = 9, family = "Helvetica", face = "bold"),
+    axis.text.x = ggplot2::element_blank(),
+    axis.ticks.x = ggplot2::element_blank(),
+    axis.title.y = ggtext::element_textbox_simple(size = 8, orientation = "left-rotated", width = NULL, halign = .5),
+    panel.grid.major.x = ggplot2::element_blank(),
+    panel.grid.minor.x = ggplot2::element_blank(),
+    panel.grid.major.y = ggplot2::element_line(colour = "#E5E5E5", linetype = "dotted"),
+    panel.grid.minor.y = ggplot2::element_blank(),
+    panel.background = ggplot2::element_rect(fill = NA, colour = "black"),
+    panel.border = ggplot2::element_rect(fill = NA, colour = NA),
+    strip.background = ggplot2::element_blank(),
+    legend.key = ggplot2::element_blank(),
+    strip.text = ggplot2::element_text(angle = 60)
+)
+
+cnCall_colors <- c("GAIN" = "#D73027", "LOSS" = "#4575B4")
+```
+
+```{r}
+offset_dmrInfo_bootstraps_all <- bind_rows(lapply(1:length(bootstrap_dmr_all), function(i){
+    
+    # i <- 1
+    
+    offset_dmrInfo <- bootstrap_dmr_all[[i]]$dmr_miracle_offset_allCpgInfo |>
+        mutate(bootstrap = {{i}})
+    
+    return(offset_dmrInfo)
+}))
+
+all_cpg_offset_all <- offset_dmrInfo_bootstraps_all |> 
+    group_by(bins_cpg) |> 
+    summarise(
+        sd_logFC = sd(logFC),
+        median_logFC = median(logFC),
+        sd_pvalue = sd(FDR),
+        median_p_value = median(FDR), 
+        .groups = "drop"
+    ) |> 
+    mutate(
+        adjusted_p_value = p.adjust(median_p_value, method = "BH")
+    )  |> 
+    left_join(dmr_miracle_offset$allCpgInfo, by = join_by(bins_cpg))
+
+dmrs_offset_all <- all_cpg_offset_all |> 
+    filter(adjusted_p_value < 0.05)
+
+
+
+offset_dmrInfo_bootstraps_non_zero <- bind_rows(lapply(1:length(bootstrap_dmr_non_zero), function(i){
+    
+    # i <- 1
+    
+    offset_dmrInfo <- bootstrap_dmr_non_zero[[i]]$dmr_miracle_offset_allCpgInfo |>
+        mutate(bootstrap = {{i}})
+    
+    return(offset_dmrInfo)
+}))
+
+all_cpg_offset_non_zero <- offset_dmrInfo_bootstraps_non_zero |> 
+    group_by(bins_cpg) |> 
+    summarise(
+        sd_logFC = sd(logFC),
+        median_logFC = median(logFC),
+        sd_pvalue = sd(FDR),
+        median_p_value = median(FDR), 
+        .groups = "drop"
+    ) |> 
+    mutate(
+        adjusted_p_value = p.adjust(median_p_value, method = "BH")
+    )  |> 
+    left_join(dmr_miracle_offset$allCpgInfo, by = join_by(bins_cpg))
+
+dmrs_offset_non_zero <- all_cpg_offset_non_zero |> 
+    filter(adjusted_p_value < 0.05)
+
+
+offset_dmrInfo_bootstraps_zero_tf <- bind_rows(lapply(1:length(bootstrap_dmr_zero), function(i){
+    
+    # i <- 1
+    
+    offset_dmrInfo <- bootstrap_dmr_zero[[i]]$dmr_miracle_offset_allCpgInfo |>
+        mutate(bootstrap = {{i}})
+    
+    return(offset_dmrInfo)
+}))
+
+all_cpg_offset_zero_tf <- offset_dmrInfo_bootstraps_zero_tf |> 
+    group_by(bins_cpg) |> 
+    summarise(
+        sd_logFC = sd(logFC),
+        median_logFC = median(logFC),
+        sd_pvalue = sd(FDR),
+        median_p_value = median(FDR), 
+        .groups = "drop"
+    ) |> 
+    mutate(
+        adjusted_p_value = p.adjust(median_p_value, method = "BH")
+    )  |> 
+    left_join(dmr_miracle_offset$allCpgInfo, by = join_by(bins_cpg))
+
+dmrs_offset_zero_tf <- all_cpg_offset_zero_tf |> 
+    filter(adjusted_p_value < 0.05)
+```
+
+
+```{r}
+cnCallcounts <- estimatesIchorCNA |> 
+    filter(sampleName %in% meta_miracle_all$sampleName) |> 
+    mutate(
+        cnCall = case_when(
+            Corrected_Call == "NEUT" ~ "NEUT",
+            Corrected_Call == "HETD" ~ "LOSS",
+            Corrected_Call %in% c("GAIN", "AMP", "HLAMP", "HLAMP2") ~ "GAIN"
+        )
+    ) |> 
+    filter(cnCall != "NEUT") |> 
+    group_by(sampleName) |> 
+    mutate(nNonZeroTF_samples = n()) |> 
+    group_by(seqnames, start, bins, cnCall, sequencingType, cancerType) |> 
+    summarise(cnCallCount = n()/65, .groups = "drop")
+
+all_bins <- estimatesIchorCNA |> 
+    group_by(seqnames, bins, start) |> 
+    summarise(nSamples = n(), .groups = "drop") |> 
+    dplyr::select(!nSamples) |> 
+    tibble::rowid_to_column(var = "binID")
+```
+
+
+Plot frequency of gains and losses in samples and also the logFC of the significant DMRs to see if there is anything suspicious going on
+```{r}
+cnCallcounts_gains_medseq_colorectal <- cnCallcounts |> 
+    filter(cnCall == "GAIN" & sequencingType == "medseq" & cancerType == "coloRectal") |> 
+    right_join(all_bins, by = join_by(seqnames, start, bins)) |> 
+    mutate(cnCallCount = ifelse(is.na(cnCallCount), 0, cnCallCount),
+           cnCall = ifelse(is.na(cnCall), "GAIN", cnCall)
+    ) 
+
+cnCallcounts_loss_medseq_colorectal <- cnCallcounts |> 
+    filter(cnCall == "LOSS" & sequencingType == "medseq" & cancerType == "coloRectal") |> 
+    right_join(all_bins, by = join_by(seqnames, start, bins)) |> 
+    mutate(
+        cnCallCount = ifelse(is.na(cnCallCount), 0, cnCallCount),
+        cnCall = ifelse(is.na(cnCall), "GAIN", cnCall)
+    )
+```
+
+
+```{r}
+ggplot() +
+    geom_bar(data = cnCallcounts_gains_medseq_colorectal, aes(x = start, y = cnCallCount, fill = cnCall), stat = "identity") +
+    geom_bar(data = cnCallcounts_loss_medseq_colorectal, aes(x = start, y = -cnCallCount, fill = cnCall), stat = "identity") +
+    scale_fill_manual(values = cnCall_colors) +
+    geom_point(data = dmrs_offset_non_zero, aes(x = start, y = median_logFC/3, color = ""), alpha = 1, size = 1) +
+    scale_color_manual(values = c("black")) +
+    facet_grid(~factor(seqnames, levels = paste0("chr", c(1:22, "X", "Y"))), space = "free_x", scales = "free_x", drop = FALSE) +
+    coord_cartesian(ylim = c(-1, 1)) +
+    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(
+        breaks = c(-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1),
+        labels = c("1", "0.75", "0.5", "0.25", "0", "0.25", "0.5", "0.75", "1"),
+        expand = c(0, 0),
+        sec.axis = sec_axis(~ . * 3, name = "LogFC DMRs")
+    ) +
+    labs(
+        title = "CN-Informed DMR profile and aggregated CN-profile of 65 high TF samples",
+        x = "Genomic location",
+        y = "Frequency of CN-calls",
+        fill = "CN-call",
+        color = "DMR"
+    ) +
+    guides(color = guide_legend(
+        fill = guide_legend(order = 2), 
+        override.aes = list(size = 3, alpha = 1))) +
+    theme_frequency_plot +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title.y.left = element_text(size=15, face="bold"),
+        axis.title.y.right = element_text(size=15, face="bold"),
+        legend.text = element_text(size = 14),  
+        legend.title = element_text(size = 16)
+    )
+
+# ggsave(plot = last_plot(), height = 7, width = 13, filename = "../manuscripts/figures/dmr_miracle_offset_high_TF.png")
+```
+
+```{r}
+compare_significant_dmrs <- all_cpg_offset_all |> 
+    full_join(all_cpg_offset_non_zero, join_by(seqnames, start, end, width, strand, bins_cpg), suffix = c("_all_samples", "_high_TF")) |> 
+    select(median_logFC_all_samples, adjusted_p_value_all_samples, median_logFC_high_TF, adjusted_p_value_high_TF, seqnames, bins_cpg, strand) |> 
+    mutate(significant = factor(case_when(
+        adjusted_p_value_all_samples > 0.05 & adjusted_p_value_high_TF > 0.05 ~ "Not significant",
+        adjusted_p_value_all_samples < 0.05 & adjusted_p_value_high_TF > 0.05 ~ "Only entire cohort",
+        adjusted_p_value_all_samples > 0.05 & adjusted_p_value_high_TF < 0.05 ~ "Only TF high",
+        adjusted_p_value_all_samples < 0.05 & adjusted_p_value_high_TF < 0.05 ~ "Both",
+    ), levels = c("Both", "Only TF high", "Only entire cohort", "Not significant"))) |> 
+    left_join(combined_bins, by = join_by(seqnames, bins_cpg, strand)) |> 
+    mutate(
+        imputed_region = !binID %in% binsIchorCNA$binID,
+        imputed_region = ifelse(imputed_region, "Centromere or Telomere", "Interstitial Regions")
+    )
+```
+
+
+```{r}
+color_significant <- c(
+    "Not significant" = "gray", 
+    "Only entire cohort" = "#0072B2", 
+    "Only TF high" = "#009E73", 
+    "Both" = "#D55E00"
+)
+
+color_alpha <- c(
+    "Not significant" = 0.3, 
+    "Only entire cohort" = 1, 
+    "Only TF high" = 0.5, 
+    "Both" = 0.5
+)
+
+compare_significant_dmrs |> 
+    ggplot(aes(x = median_logFC_high_TF, y = median_logFC_all_samples, color = significant)) +
+    geom_point(alpha = 0.3, size = 0.3) +
+    scale_color_manual(values = color_significant) +
+    labs(
+        title = "Additional and removed DMRs in high TF samples",
+        shape = "DMR in imputed region",
+        color = "Significance of DMRs:",
+        x = "LogFC (high TF samples)",
+        y = "LogFC (all samples)"
+    ) +
+    theme_light() +
+    guides(color = guide_legend(override.aes = list(size = 4, alpha = 1))) +
+    theme(
+        legend.position = "bottom",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        plot.title = element_text(size = 15, face="bold")
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/concordance_logFC_high_TF.png")
+
+compare_significant_dmrs |> 
+    ggplot(aes(x = median_logFC_high_TF, y = median_logFC_all_samples, color = significant, alpha = significant)) +
+    geom_point(size = 3) +
+    scale_color_manual(values = color_significant) +
+    scale_alpha_manual(values = color_alpha) +
+    coord_cartesian(xlim = c(-2.5, 0), ylim = c(-2.5, 0)) +
+    theme_light() +
+    guides(color = guide_legend(override.aes = list(size = 4, alpha = 1)), alpha = "none") +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title = element_blank()
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/concordance_logFC_zoom_hypo_high_TF.png")
+
+compare_significant_dmrs |> 
+    ggplot(aes(x = median_logFC_high_TF, y = median_logFC_all_samples, color = significant, alpha = significant)) +
+    geom_point(size = 3) +
+    scale_color_manual(values = color_significant) +
+    scale_alpha_manual(values = color_alpha) +
+    coord_cartesian(xlim = c(0.5, 2.5), ylim = c(0.5, 2.5)) +
+    theme_light() +
+    guides(color = guide_legend(override.aes = list(size = 4, alpha = 1)), alpha = "none") +
+    theme(
+        legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title = element_blank()
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/concordance_logFC_zoom_hyper_high_TF.png")
+```
+
+```{r}
+tumorFractionEstimates <- estimatesIchorCNA |> 
+    group_by(sampleName) |> 
+    summarise(tumorFractionEstimate = unique(tumorFractionEstimate), .groups = "drop") |> 
+    filter(sampleName %in% colnames(counts_miracle_subset_cv))
+```
+
+
+Determine the logCPM for each DMR in each sample (only miracle samples).
+Counts are normalized according to library size in standard model
+Counts are normalized according to offset matrix (which includes library size in logR from ichorCNA) in the offset model
+```{r}
+logCPM_per_dmr_offset <- edgeR::cpm(counts_miracle_subset_cv, log = TRUE, offset = dmr_miracle_offset$fit$offset) |>
+    as_tibble() |>
+    mutate(bins_cpg = rownames(counts_miracle_subset_cv)) |> 
+    tidyr::pivot_longer(cols = !bins_cpg, names_to = "sampleName", values_to = "logCPM") |> 
+    left_join(tumorFractionEstimates, by = join_by(sampleName)) |>
+    filter(!is.na(tumorFractionEstimate)) |> 
+    mutate(dmr_offset = ifelse(bins_cpg %in% dmrs_offset_non_zero$bins_cpg, TRUE, FALSE))
+```
+
+
+```{r}
+dmr_labels_offset <- dmrs_offset_non_zero |> 
+    mutate(dmr_type = ifelse(median_logFC > 0, "hyper", "hypo")) |> 
+    select(bins_cpg, dmr_type)
+
+cor_offset <- logCPM_per_dmr_offset |> 
+    filter(tumorFractionEstimate > 0) |> 
+    left_join(dmr_labels_offset, by = join_by(bins_cpg)) |> 
+    group_by(bins_cpg) |> 
+    summarise(
+        cor = case_when(
+            dmr_type == "hyper" ~ cor.test(logCPM, tumorFractionEstimate, method = "spearman", alternative = "greater")$estimate,
+            dmr_type == "hypo" ~ cor.test(logCPM, tumorFractionEstimate, method = "spearman", alternative = "less")$estimate,
+            is.na(dmr_type) ~ cor.test(logCPM, tumorFractionEstimate, alternative = "two.sided", method = "spearman")$estimate
+        ),
+        cor_p_value = case_when(
+            dmr_type == "hyper" ~ cor.test(logCPM, tumorFractionEstimate, method = "spearman", alternative = "greater")$p.value,
+            dmr_type == "hypo" ~ cor.test(logCPM, tumorFractionEstimate, method = "spearman", alternative = "less")$p.value,
+            is.na(dmr_type) ~ cor.test(logCPM, tumorFractionEstimate, alternative = "two.sided", method = "spearman")$p.value
+        ),
+        .groups = "drop"
+    ) |>
+    mutate(cor_p_value_adjusted = p.adjust(cor_p_value, method = "BH")) |> 
+    distinct()
+```
+
+
+```{r}
+meta_total_all <- bind_rows(mutate(data_for_standard_analysis_all$meta_HBD, sample = "HBD"), mutate(data_for_standard_analysis_all$meta_miracle_all, sample = "CRLM")) 
+
+log_cpm_counts_dmrs <- edgeR::cpm(data_for_standard_analysis_all$counts_miracle_subset_cv , log = TRUE, offset = data_for_standard_analysis_all$dmr_miracle_offset$fit$offset) |>
+    as_tibble() |>
+    mutate(bins_cpg = rownames(data_for_standard_analysis_all$counts_miracle_subset_cv)) |> 
+    tidyr::pivot_longer(cols = !bins_cpg, names_to = "sampleName", values_to = "logCPM") |> 
+    left_join(meta_total_all, by = join_by(sampleName)) |> 
+    select(bins_cpg, sampleName, logCPM) |> 
+    filter(bins_cpg %in% dmrs_offset_non_zero$bins_cpg)
+
+
+log_cpm_counts_dmrs_wide <- log_cpm_counts_dmrs %>%
+    select(sampleName, bins_cpg, logCPM) %>%
+    tidyr::pivot_wider(names_from = bins_cpg, values_from = logCPM) %>%
+    tibble::column_to_rownames("sampleName")  
+
+
+pca_result <- prcomp(log_cpm_counts_dmrs_wide, scale. = TRUE)
+
+
+explained_var <- (pca_result$sdev^2) / sum(pca_result$sdev^2)
+pc1_var <- round(explained_var[1] * 100, 1)
+pc2_var <- round(explained_var[2] * 100, 1)
+
+
+pca_log_cpm_counts_dmrs <- as_tibble(pca_result$x, rownames = "sampleName")
+
+
+pca_log_cpm_counts_dmrs |> 
+    left_join(meta_total_all, by = join_by(sampleName)) |> 
+    ggplot(aes(x = PC1, y = PC2, shape = sample, color = tumorFractionEstimate)) +
+    geom_point(alpha = 0.8, size = 2) +
+    scale_shape_manual(values = c(16, 2)) +
+    labs(
+        title = "PCA of logCPM Values in Differentially Methylated Regions",
+        x = paste0("PC1 (", pc1_var, "%)"),
+        y = paste0("PC2 (", pc2_var, "%)"),
+        shape = "Sample",
+        color = "Tumor fraction"
+    ) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        # legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10)
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/pca_oflogCPM_in_dmrs.png")
+
+tf_vs_pc1 <- estimatesIchorCNA |> 
+    group_by(sampleName) |> 
+    summarise(tumorFractionEstimate = unique(tumorFractionEstimate), .groups = "drop") |> 
+    left_join(pca_log_cpm_counts_dmrs, by = join_by(sampleName)) |> 
+    filter(tumorFractionEstimate > 0)
+
+tf_vs_pc1 |> 
+    ggplot(aes(x = tumorFractionEstimate, y = PC1)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8) +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", vjust = 20.5, hjust = -2.7, size = 5, cor.coef.name ="rho")
+
+cor(tf_vs_pc1$tumorFractionEstimate, tf_vs_pc1$PC1)
+```
+
+
+```{r}
+log_cpm_counts_all_cpg <- edgeR::cpm(data_for_standard_analysis_all$counts_miracle_subset_cv , log = FALSE, offset = data_for_standard_analysis_all$dmr_miracle_offset$fit$offset) |>
+    as_tibble() |>
+    mutate(bins_cpg = rownames(data_for_standard_analysis_all$counts_miracle_subset_cv)) |> 
+    tidyr::pivot_longer(cols = !bins_cpg, names_to = "sampleName", values_to = "logCPM") |> 
+    left_join(meta_total_all, by = join_by(sampleName)) |> 
+    select(bins_cpg, sampleName, logCPM) 
+
+dmrs_offset_non_zero
+
+cpg_stats <- all_cpg_offset_non_zero |> 
+    select(bins_cpg, median_logFC, adjusted_p_value)
+
+read_count_fractions <- log_cpm_counts_all_cpg |> 
+    left_join(cpg_stats, by = join_by(bins_cpg)) |> 
+    left_join(meta_total_all, by = join_by(sampleName)) |> 
+    mutate(
+        sample_2 = case_when(
+            sample == "HBD" ~ "HBD",
+            sample == "CRLM" & tumorFractionEstimate < 0.05 ~ "CRLM (low TF)",
+            sample == "CRLM" & tumorFractionEstimate > 0.05 ~ "CRLM (high TF)"
+        )
+    ) |> 
+    mutate(
+        dmr = case_when(
+            median_logFC > 0 & adjusted_p_value < 0.05 ~ "DMR (hyper)",
+            median_logFC < 0 & adjusted_p_value < 0.05 ~ "DMR (hypo)",
+            TRUE ~ "Not significant"
+        )
+    ) |> 
+    group_by(sampleName) |> 
+    mutate(total_cpm = sum(logCPM)) |> 
+    ungroup() |> 
+    group_by(sampleName) |>
+    mutate(frac_cpm = logCPM / total_cpm) |> 
+    group_by(sampleName, sample_2, dmr, tumorFractionEstimate) |> 
+    summarise(sum_frac_cpm = sum(frac_cpm), .groups = "drop")
+
+read_count_fractions_split <- read_count_fractions |> 
+    group_by(sample_2, dmr) |> 
+    group_split()
+
+names(read_count_fractions_split) <- c("crlm_high_hyper", "crlm_high_hypo", "crlm_high_rest", "crlm_low_hyper", "crlm_low_hypo", "crlm_low_rest", "hbd_hyper", "hbd_hypo", "hbd_rest")
+
+wilcox.test(read_count_fractions_split$crlm_high_hyper$sum_frac_cpm, read_count_fractions_split$hbd_hyper$sum_frac_cpm)
+wilcox.test(read_count_fractions_split$crlm_low_hyper$sum_frac_cpm, read_count_fractions_split$hbd_hyper$sum_frac_cpm)
+
+wilcox.test(read_count_fractions_split$crlm_high_hypo$sum_frac_cpm, read_count_fractions_split$hbd_hypo$sum_frac_cpm)
+wilcox.test(read_count_fractions_split$crlm_low_hypo$sum_frac_cpm, read_count_fractions_split$hbd_hypo$sum_frac_cpm)
+
+wilcox.test(read_count_fractions_split$crlm_high_rest$sum_frac_cpm, read_count_fractions_split$hbd_rest$sum_frac_cpm)
+wilcox.test(read_count_fractions_split$crlm_low_rest$sum_frac_cpm, read_count_fractions_split$hbd_rest$sum_frac_cpm)
+```
+
+
+```{r}
+read_count_fractions |> 
+    ggplot(aes(x = sample_2, y = sum_frac_cpm, color = sample_2)) +
+    gghalves::geom_half_point_panel(size = 1, alpha = 1, range_scale = 2) +
+    gghalves::geom_half_boxplot(outlier.shape = NA) +
+    facet_wrap(~dmr, scales = "free_y") +
+    scale_color_manual(values = c(
+        "CRLM (high TF)" = "#990000",
+        "CRLM (low TF)" = "#e06666",
+        "HBD" = "#228B22"
+    )) +
+    labs(
+        title = "Fraction of read counts in DMRs",
+        x = "",
+        y = "Fraction"
+    ) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        legend.position = "none"
+    ) 
+
+# ggsave(plot = last_plot(), height = 5, width = 12, filename = "../manuscripts/figures/fraction_reads_dmrs.png")
+```
+
+```{r}
+read_count_fractions |> 
+    filter(dmr == "DMR (hyper)") |> 
+    filter(sample_2 == "CRLM (high TF)") |>
+    ggplot(aes(x = sum_frac_cpm, y = tumorFractionEstimate)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8) +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", size = 5, cor.coef.name ="rho") +
+    theme_light()
+
+read_count_fractions |> 
+    filter(dmr == "DMR (hypo)") |> 
+    filter(sample_2 == "CRLM (high TF)") |>
+    ggplot(aes(x = sum_frac_cpm, y = tumorFractionEstimate)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8) +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", size = 5, cor.coef.name ="rho")
+```
+
+
+
+```{r}
+
+```
+
+

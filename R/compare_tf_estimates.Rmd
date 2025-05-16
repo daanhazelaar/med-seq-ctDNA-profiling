@@ -1,0 +1,185 @@
+---
+title: "Compare ichorCNA estimates"
+author: "Daan Hazelaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+```
+
+plotting parameters
+```{r}
+colors = c('medSeq' = '#009E73', 'shallowSeq' = '#E69F00', 'medseq_not_methylated_NA' = '#009E73', 'swgs_NA_0_150' = '#E69F00', 'shallowSeq_allReads' = '#D55E00', 'shallowSeq_sizeSelected_90_150' = '#F0E442', 'medSeq_methylated' = '#0072B2')
+
+cancerTypes_labels <- c("coloRectal" = "Colorectal \n(cfDNA)", "ocularMelanomaCFdna" = "Ocular Melanoma \n(cfDNA)", "ocularMelanomaTissue" = "Ocular Melanoma \n(tissue)", "ovary" = "Ovarium \n(cfDNA)", "skinMelanoma" = "Skin Melanoma \n(cfDNA)")
+
+sequencingType_labels <- c("medseq" = "MeD-seq", "swgs" = "sWGS")
+
+readType_labels <- c("medseq_not_methylated_NA" = "MeD-seq (background)", "medSeq_methylated" = "MeD-seq (methylated)", "swgs_NA_0_150" = "sWGS")
+```
+
+
+```{r}
+estimatesIchorCNA <- readr::read_csv(file = "./data/ichorCNA_estimates.csv") |> 
+    filter(subSample == 1)
+
+load(file = "./data/tumor_fraction_bootstrapped_n10000_sample_distribution.RData")
+```
+
+```{r}
+estimatesIchorCNAWide <- estimatesIchorCNA |> 
+    group_by(subjectName, analysis_ID, cancerType, readTypeShort) |> 
+    summarise(tumorFractionEstimate = unique(tumorFractionEstimate), .groups = "drop") |> 
+    tidyr::pivot_wider(names_from = readTypeShort, values_from = tumorFractionEstimate) 
+```
+
+
+```{r}
+zeroTFsamples <- estimatesIchorCNAWide |> 
+    arrange(cancerType) |> 
+    filter(s1 == 0) |> 
+    mutate(s1x = seq(0, 0.42, by = 0.02))
+
+zeroTFsamplesforplotdata <- estimatesIchorCNAWide  |> 
+    filter(s1 != 0) |> 
+    mutate(s1x = s1) |> 
+    bind_rows(zeroTFsamples) 
+```
+
+
+```{r}
+estimatesIchorCNAWide |> 
+    ggplot(aes(x = mN * 100, y = s1 * 100)) +
+    geom_point() +
+    geom_abline(slope = 1, intercept = 0, color = "gray") +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8) +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", vjust = 20.5, hjust = -2.7, size = 5, cor.coef.name ="rho") +
+    geom_text(data = zeroTFsamplesforplotdata, aes(x = mN * 100, y = s1x * 100, label = analysis_ID), size = 3, vjust = -1, hjust = 0.35) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold")
+    ) +
+    labs(
+        title = "Correlation TF-estimates",
+        x = "TF-estimate based on MeD-seq (%)",
+        y = "TF-estimate based on sWGS (%)"
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/plot_correlation_TF.png")
+```
+
+
+```{r}
+estimatesIchorCNAVaf <- estimatesIchorCNA |> 
+    dplyr::select(analysis_ID, readType, readTypeShort, timepoint, highest_VAF_BL,tumorFractionEstimate) |> 
+    filter(timepoint == 0) |> 
+    group_by(analysis_ID, readType, readTypeShort, timepoint) |> 
+    summarise(
+        highest_VAF_BL = unique(highest_VAF_BL), 
+        tumorFractionEstimate = unique(tumorFractionEstimate) * 100, 
+        .groups = "drop")
+
+vafVsmedSeq <- estimatesIchorCNAVaf |> 
+    filter(readType == "medseq_not_methylated_NA")
+
+wilcox.test(vafVsmedSeq$highest_VAF_BL, vafVsmedSeq$tumorFractionEstimate)
+
+vafVssWGS <- estimatesIchorCNAVaf |> 
+    filter(readType == "swgs_NA_0_150")
+
+wilcox.test(vafVssWGS$highest_VAF_BL, vafVssWGS$tumorFractionEstimate)
+
+estimatesIchorCNAVaf |> 
+    filter(readType == "swgs_NA_0_150") |> 
+    arrange(tumorFractionEstimate)
+```
+
+```{r}
+estimatesIchorCNAVaf |> 
+    ggplot(aes(y = highest_VAF_BL, x = tumorFractionEstimate, color = readType)) +
+    scale_color_manual(values = colors, labels = readType_labels) +
+    geom_abline(slope = 1, intercept = 0, color = "gray") +
+    geom_point() +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8) +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", size = 4, cor.coef.name ="rho") +
+    labs(
+        title = "VAF and TF-estimates based on MeD-seq and sWGS",
+        x = "TF-estimate (%)",
+        y = "VAF (%)",
+        color = "Assay:"
+    ) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold")
+    ) 
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/tf_estimates_and_vaf.png")
+```
+
+```{r}
+baStatsTFall <- estimatesIchorCNA |> 
+    group_by(analysis_ID, readTypeShort, timepoint, cancerType, highest_VAF_BL) |> 
+    summarise(
+        tumorFractionEstimate = unique(tumorFractionEstimate) * 100,
+        .groups = "drop") |> 
+    tidyr::pivot_wider(names_from = readTypeShort, values_from = tumorFractionEstimate) |> 
+    mutate(
+        across(starts_with("m"), .fns = ~ .x - s1, .names = "diff_s1_vs_{.col}"),
+        across(starts_with("m"), .fns = ~ (s1 + .x) / 2, .names = "tfMeanMeasurement_s1_vs_{.col}")
+    ) |> 
+    mutate(
+        across(starts_with("diff"), .fns = ~ mean(.x), .names = "mean_{.col}"),
+        across(starts_with("diff"), .fns = ~ sd(.x), .names = "sd_{.col}")
+    ) |> 
+    ungroup()
+```
+
+
+```{r}
+samplingDistributionTF$mean_diff_s1_vs_mN |> mean()
+quantile(samplingDistributionTF$mean_diff_s1_vs_mN, probs = 0.025)
+quantile(samplingDistributionTF$mean_diff_s1_vs_mN, probs = 0.975)
+```
+
+```{r}
+baStatsTFall |> 
+    select(c(analysis_ID, timepoint, cancerType, contains("s1_vs_mN"))) |> 
+    ggplot(aes(x = tfMeanMeasurement_s1_vs_mN, y = diff_s1_vs_mN, label = analysis_ID)) + 
+    geom_hline(yintercept = 0, linetype = "dotted") +
+    geom_hline(aes(yintercept = mean(samplingDistributionTF$mean_diff_s1_vs_mN))) +
+    geom_ribbon(aes(
+        ymin = quantile(samplingDistributionTF$mean_diff_s1_vs_mN, probs = 0.025),
+        ymax = quantile(samplingDistributionTF$mean_diff_s1_vs_mN, probs = 0.975)), 
+        fill = "gray", alpha = 0.6
+    ) +
+    geom_hline(aes(yintercept = mean(samplingDistributionTF$ciLower_diff_s1_vs_mN))) +
+    geom_hline(aes(yintercept = mean(samplingDistributionTF$ciUpper_diff_s1_vs_mN))) +
+    geom_point() +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", vjust = -5.5, size = 5, cor.coef.name ="rho") +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold")
+    ) +
+    labs(
+        title = "BA plot: TF-estimates",
+        x = "Mean TF-estimate (%)",
+        y = "Difference (%)"
+    ) +
+    coord_cartesian(ylim = c(-30, 30), xlim = c(0, 50)) +
+    annotate("text", x = 50.5, y = 1.5, label = "mean") +
+    annotate("text", x = 50, y = c(8, -8), label = "95% CI")
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/ba_plot_tf_estimate.png")
+```
+
+```{r}
+
+```
+

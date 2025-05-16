@@ -1,0 +1,250 @@
+---
+title: "compare cn profiles"
+author: "Daan Hazelaar"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# options(bitmapType = "cairo")
+library(dplyr)
+library(ggplot2)
+```
+
+plotting parameters
+```{r}
+colors = c('medSeq' = '#009E73', 'shallowSeq' = '#E69F00', 'medseq_not_methylated_NA' = '#009E73', 'swgs_NA_0_150' = '#E69F00', 'shallowSeq_allReads' = '#D55E00', 'shallowSeq_sizeSelected_90_150' = '#F0E442', 'medSeq_methylated' = '#0072B2')
+
+cancerTypes_labels <- c("coloRectal" = "CRLM", "ocularMelanomaCFdna" = "Ocular Melanoma \n(cfDNA)", "ocularMelanomaTissue" = "Ocular Melanoma \n(tissue)", "ovary" = "Ovary", "skinMelanoma" = "Skin Melanoma \n(cfDNA)")
+
+sequencingType_labels <- c("medseq" = "MeD-seq", "swgs" = "sWGS")
+
+readType_labels <- c("medseq_not_methylated_NA" = "MeD-seq \n(background)", "medSeq_methylated" = "MeD-seq (methylated)", "swgs_NA_0_150" = "sWGS")
+
+subSampling_shapes <- c("1" = 16, "0.05" = 5, "0.1" = 10, "0.25" = 25, "0.5" = 23, "0.75" = 22)
+
+subSampling_labels <- c("1" = "100", "0.05" = "5", "0.1" = "10", "0.25" = "25", "0.5" = "50", "0.75" = "75")
+```
+
+```{r}
+estimatesIchorCNA_all <- readr::read_csv(file = "./data/ichorCNA_estimates.csv")
+
+estimatesIchorCNA <- estimatesIchorCNA_all |> 
+    filter(subSample == 1)
+
+segmentsIchorCNA <- estimatesIchorCNA |> 
+    group_by(subjectName, analysis_ID, analysis_ID2, analysis_ID3, timepoint, sampleName, tumorFractionEstimate, readType, subSample,sequencingType, methylationStatus, rangeSizeSelection, seqnames, segmentIchorCNA) |> 
+    summarise(
+        bins = n(), 
+        start = min(start),
+        end = max(end),
+        event = unique(event),
+        copy.number = unique(copy.number),
+        median = median(logR),
+        .groups = "drop") |> 
+    arrange(seqnames)
+```
+
+
+
+Accuracy and Cohens kappa for copy number states
+```{r}
+estimatesIchorCNA_cfDNA_wide <- estimatesIchorCNA |> 
+    dplyr::select(analysis_ID, readTypeShort, copy.number, seqnames, start, end) |> 
+    tidyr::pivot_wider(names_from = readTypeShort, values_from = copy.number) |> 
+    filter(!is.na(s1)) |> 
+    filter(!is.na(mN))
+
+sampleBootWide <- estimatesIchorCNA_cfDNA_wide |> 
+    slice_sample(n = nrow(estimatesIchorCNA_cfDNA_wide), replace = FALSE)
+
+s1mN <- sampleBootWide |> 
+    select(s1, mN) |> 
+    as.data.frame()
+
+binLabels <- list(s1mN)
+names(binLabels) <- c("s1mN")
+
+kappaSampleList <- lapply(binLabels, function(binLabel){
+    
+    kappa <- irr::kappa2(binLabel, weight = "squared")
+    
+    return(kappa)
+})
+
+kappaSample <- tibble(
+    Kappa = kappaSampleList$s1mN$value
+)
+
+s1mN_per_sample <- sampleBootWide |> 
+    select(analysis_ID, s1, mN) |> 
+    group_by(analysis_ID) 
+
+
+ids <- sampleBootWide$analysis_ID |> unique()
+
+sampleBootWide_persample <- lapply(ids, function(id){
+    
+    x <- sampleBootWide |> 
+        filter(analysis_ID == id) 
+    
+    return(x)
+})
+
+sampleBootWide_persample[1]
+```
+
+
+```{r}
+estimatesIchorCNAWide <- estimatesIchorCNA |> 
+    # filter(cancerType %in% c("coloRectal", "ovary")) |> 
+    group_by(subjectName, analysis_ID, cancerType, readTypeShort) |> 
+    summarise(tumorFractionEstimate = unique(tumorFractionEstimate), .groups = "drop") |> 
+    tidyr::pivot_wider(names_from = readTypeShort, values_from = tumorFractionEstimate) |> 
+    mutate(subjectName = ifelse(is.na(subjectName), analysis_ID, subjectName)) |> 
+    group_by(cancerType) |> 
+    mutate(id = dense_rank(subjectName)) |> 
+    group_by(subjectName) |> 
+    mutate(
+        analysis_IDnew  = ifelse(
+            stringr::str_detect(analysis_ID, pattern = "T0|T3"), 
+            paste0("CRLM_", id, "_", stringr::str_extract(analysis_ID, pattern = "T0|T3")), 
+            paste0("Ovary_", id)
+        )
+    )
+```
+
+
+```{r}
+kappaSampleList <- lapply(sampleBootWide_persample, function(x){
+    
+    #x <- sampleBootWide_persample[2]
+    
+    y <- x |>
+        bind_rows() |> 
+        filter(seqnames != "chrX") |> 
+        select(s1, mN) 
+    
+    
+    kappa <- tibble(
+        analysis_ID = x$analysis_ID[1],    
+        kappa = irr::kappa2(y, weight = "squared")$value
+    )
+    
+    return(kappa)
+})
+
+kappa_per_sample <- bind_rows(kappaSampleList) |> 
+    mutate(kappa2 = ifelse(is.na(kappa), 1, kappa)) |> 
+    mutate(kappa3 = ifelse(kappa2 == 0, 1, kappa2))
+# filter(analysis_ID != "YSL06T0")
+#mutate(kapp4 = ifelse(analysis_ID == "YSL06T0"), )
+
+
+kappa_per_sample |> 
+    left_join(estimatesIchorCNAWide, by = join_by(analysis_ID)) |> 
+    ggplot(aes(x = reorder(analysis_IDnew, kappa3), y = kappa3)) +
+    geom_bar(stat = "identity", fill = '#009E73') +
+    labs(
+        title = "Agreement between CN-profiles from MeD-seq and sWGS",
+        x = "Patient",
+        y = "Kappa"
+    ) +
+    # coord_cartesian(ylim = c(0.5, 1)) +
+    theme_light() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+        legend.position = "bottom",
+        axis.title=element_text(size=15, face="bold"),
+        plot.title = element_text(size = 15, face="bold")
+    )
+
+x <- estimatesIchorCNA |> 
+    group_by(analysis_ID) |> 
+    summarise(tf = unique(tumorFractionEstimate), .groups = "drop") |> 
+    filter(tf != 0) |> 
+    pull(analysis_ID) |> 
+    unique()
+
+kappa_per_sample |> 
+    filter(analysis_ID %in% x) |> 
+    arrange(kappa3) |> 
+    pull(kappa3) |> mean()
+
+estimatesIchorCNA |> 
+    filter(analysis_ID == "EMC002T0")
+
+kappa_per_sample |> arrange(kappa3)
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/plot_kappa_per_sample.png")
+```
+
+```{r}
+new_id_names <- estimatesIchorCNAWide |> 
+    select(analysis_ID, analysis_IDnew)
+
+noisePerSample <- estimatesIchorCNA |>
+    group_by(analysis_ID3, cancerType, readType, seqnames, segmentIchorCNA, tumorFractionEstimate, meanCoverage, totalReads) |> 
+    mutate(medianLogR = median(logR, na.rm = TRUE)) |> 
+    ungroup() |> 
+    mutate(madLogR = abs(logR - medianLogR)) |> 
+    group_by(analysis_ID, analysis_ID2, analysis_ID3, cancerType, readType, subSample, tumorFractionEstimate, meanCoverage, totalReads, meanDepth, meanMapQuality, cfDNA_concentration) |>
+    summarise(madLogR = median(madLogR, na.rm = TRUE), .groups = "drop")  
+
+noisePerSample |> 
+    arrange(madLogR) |> 
+    left_join(new_id_names, by = join_by(analysis_ID)) |> 
+    ggplot(aes(x =analysis_IDnew, y = madLogR, fill = readType)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = colors, labels = readType_labels) +
+    facet_grid(~ cancerType, scales = "free_x", space = "free_x", labeller = labeller(cancerType = as_labeller(cancerTypes_labels))) +
+    labs(
+        title = "Noise levels in CN-profiles from MeD-seq and sWGS",
+        y = "MAD logR",
+        x = "Patient"
+    ) +
+    theme_light() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "none",
+        axis.title=element_text(size=15, face="bold"),
+        plot.title = element_text(size = 15, face="bold")
+    )
+```
+
+
+plot influence of sequencing coverage on noise levels of sample
+```{r}
+noisePerSample |> 
+    ggplot(aes(y = madLogR, x = meanCoverage, color = readType, shape = as.character(subSample))) +
+    geom_point() +
+    geom_line(aes(group = analysis_ID2), alpha = 0.3) +
+    facet_grid("cancerType", labeller = labeller(cancerType = as_labeller(cancerTypes_labels))) +
+    theme_light() +
+    theme(
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10),
+        axis.title=element_text(size=15, face="bold"),
+        plot.title = element_text(size = 15, face="bold")
+    ) +
+    labs(
+        title = "Sample sequencing coverage and noise level in CN-profile",
+        x = "Sequencing coverage (%)",
+        y = "MAD logR",
+        shape = "Downsampling (%)",
+        color = "Assay"
+    ) +
+    scale_color_manual(values = colors, labels = readType_labels) +
+    scale_shape_manual(values = subSampling_shapes, labels = subSampling_labels)
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/plot_coverage_noise.png")
+```
+
+```{r}
+
+```
+
+

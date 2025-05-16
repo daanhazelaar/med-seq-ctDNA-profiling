@@ -1,0 +1,147 @@
+---
+title: "compare  normalized read counts"
+author: "Daan Hazelaar"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+```
+
+plotting parameters
+```{r}
+colors = c('medSeq' = '#009E73', 'shallowSeq' = '#E69F00', 'medseq_not_methylated_NA' = '#009E73', 'swgs_NA_0_150' = '#E69F00', 'shallowSeq_allReads' = '#D55E00', 'shallowSeq_sizeSelected_90_150' = '#F0E442', 'medSeq_methylated' = '#0072B2')
+
+cancerTypes_labels <- c("coloRectal" = "Colorectal \n(cfDNA)", "ocularMelanomaCFdna" = "Ocular Melanoma \n(cfDNA)", "ocularMelanomaTissue" = "Ocular Melanoma \n(tissue)", "ovary" = "Ovarium \n(cfDNA)", "skinMelanoma" = "Skin Melanoma \n(cfDNA)")
+
+sequencingType_labels <- c("medseq" = "MeD-seq", "swgs" = "sWGS")
+
+readType_labels <- c("medseq_not_methylated_NA" = "MeD-seq (background)", "medSeq_methylated" = "MeD-seq (methylated)", "swgs_NA_0_150" = "sWGS")
+
+presenceCN_labels <- c("TRUE" = "Sample with CNA", "FALSE" = "Samples without CNA")
+```
+
+```{r}
+estimatesIchorCNA <- readr::read_csv(file = "./data/ichorCNA_estimates.csv") |> 
+    filter(subSample == 1) |> 
+    mutate(presenceCN = ifelse(tumorFractionEstimate>0, TRUE, FALSE))
+
+load(file = "./data/normalized_readCounts_bootstrapped_n10000_sample_distribution.RData")
+```
+
+
+```{r}
+estimatesIchorCNAWide <- estimatesIchorCNA |> 
+    dplyr::select(analysis_ID, timepoint, cancerType, readTypeShort, gcContent, normalizedReadCount, seqnames, start, end, presenceCN) |> 
+    tidyr::pivot_wider(values_from = normalizedReadCount, names_from = readTypeShort) |> 
+    filter(!is.na(mN)) |> 
+    filter(!is.na(s1)) |> 
+    filter(seqnames != "chrX") |> 
+    mutate(timepoint = paste0("timepoint_", timepoint))
+```
+
+
+# Correlation of normalized read counts
+```{r}
+estimatesIchorCNAWide |> 
+    ggplot(aes(x = log2(mN), y = log2(s1))) +
+    geom_abline(slope = 1, intercept = 0, color = "gray") +
+    geom_hex(binwidth = c(0.03, 0.03)) +
+    scale_fill_gradientn(
+        colors = rev(RColorBrewer::brewer.pal(9, "YlGnBu")),
+        values = c(0, exp(seq(-5, 0, length.out = 1000)))
+    ) +
+    facet_grid(~ presenceCN, labeller = labeller(presenceCN = as_labeller(presenceCN_labels))) +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8, color = '#D55E00') +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", vjust = 1, hjust = 0, size = 5, cor.coef.name ="rho") +
+    theme_light() +
+    labs(
+        title = "Correlation logR between MeD-seq and sWGS logR",
+        x = "logR (MeD-seq)",
+        y = "logR (sWGS)"
+    ) +
+    # coord_cartesian(xlim = c(0, 2.5), ylim = c(0, 2.5)) +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        # legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10)
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/heatmap_correlation_logR.png")
+```
+
+
+# BA analysis
+
+Calculate stats for BA normalized read counts
+```{r}
+baStatsNormalizedReadCountAll <- estimatesIchorCNA |> 
+    dplyr::select(analysis_ID, sampleName, timepoint, cancerType, readTypeShort, gcContent, normalizedReadCount, seqnames, start, end, copy.number, presenceCN) |> 
+    tidyr::pivot_wider(values_from = normalizedReadCount, names_from = readTypeShort) |> 
+    filter(!is.na(mN)) |> 
+    filter(!is.na(s1)) |>  
+    mutate(
+        across(starts_with("m"), .fns = ~ .x - s1, .names = "diff_s1_vs_{.col}"),
+        across(starts_with("m"), .fns = ~ (s1 + .x) / 2, .names = "normalizedReadCountMeanMeasurement_s1_vs_{.col}"),
+        across(starts_with("m"), .fns = ~ (.x - s1) / ((s1 + .x) / 2) * 100, .names = "perc_diff_s1_vs_{.col}"),
+    ) |> 
+    ungroup()
+```
+
+
+```{r}
+baStatsNormalizedReadCountAll |> 
+    select(c(analysis_ID, presenceCN, cancerType, contains("s1_vs_mN"))) |> 
+    ggplot(aes(x = normalizedReadCountMeanMeasurement_s1_vs_mN, y = perc_diff_s1_vs_mN)) + 
+    geom_hline(yintercept = 0, linetype = "dotted") +
+    geom_hline(aes(yintercept = mean(samplingDistributionNormalizedReadCount$mean_perc_diff_s1_vs_mN))) +
+    geom_ribbon(aes(
+        ymin = quantile(samplingDistributionNormalizedReadCount$mean_perc_diff_s1_vs_mN, probs = 0.025),
+        ymax = quantile(samplingDistributionNormalizedReadCount$mean_perc_diff_s1_vs_mN, probs = 0.975)),
+        fill = "gray", alpha = 0.6
+    ) +
+    geom_hline(aes(yintercept = mean(samplingDistributionNormalizedReadCount$ciLower_perc_diff_s1_vs_mN))) +
+    geom_hline(aes(yintercept = mean(samplingDistributionNormalizedReadCount$ciUpper_perc_diff_s1_vs_mN))) +
+    geom_point(size = 0.1) +
+    geom_hex(binwidth = c(0.02, 1)) +
+    scale_fill_gradientn(
+        colors = rev(RColorBrewer::brewer.pal(9, "YlGnBu")),
+        values = c(0, exp(seq(-5, 0, length.out = 100)))
+    ) +
+    labs(
+        title = "BA plot: difference in logR between MeD-seq en sWGS",
+        x = "Mean logR",
+        y = "Difference (%)"
+    ) +
+    coord_cartesian(ylim = c(-50, 50), xlim = c(0.5, 2)) +
+    annotate("text", x = 1.92, y = 3, label = "mean") +
+    annotate("text", x = 1.9, y = c(16, -10), label = "95% CI") +
+    geom_smooth(method = "lm", se = T, alpha = 0.2, weight = 0.8, color = '#D55E00') +
+    ggpubr::stat_cor(p.accuracy = 0.001, method = "spearman", vjust = 2, hjust = 0, size = 5, cor.coef.name ="rho") +
+    # ggpubr::stat_regline_equation(aes(label =  paste(..eq.label.., ..rr.label.., sep = "~~~~")), label.y.npc = "top", vjust = 1, hjust = 0, size = 5) +
+    facet_grid(~ presenceCN, labeller = labeller(presenceCN = as_labeller(presenceCN_labels))) +
+    theme_light() +
+    theme(
+        plot.title = element_text(size = 15, face="bold"),
+        axis.title=element_text(size=15, face="bold"),
+        axis.text.x = element_text(size = 10),
+        # legend.position = "none",
+        strip.background = element_rect(fill = "lightgray"),
+        strip.text = element_text(color = "black", size = 10)
+    )
+
+# ggsave(plot = last_plot(), height = 5, width = 7, filename = "../manuscripts/figures/heatmap_BA_analysis_logR.png")
+```
+
+
+
+```{r}
+
+```
+
